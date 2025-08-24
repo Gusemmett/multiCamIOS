@@ -1,0 +1,363 @@
+openapi: 3.0.3
+info:
+  title: multiCam Network API
+  description: |
+    Network protocol for synchronized multi-device camera recording system.
+    
+    ## Overview
+    The multiCam system enables synchronized recording across multiple iPhone devices connected via local WiFi network. The protocol uses TCP connections on port 8080 with JSON message format.
+    
+    ## Discovery
+    Devices advertise themselves using Bonjour/mDNS with service type `_multicam._tcp.local.`
+    
+    ## Synchronization
+    Recording commands include Unix timestamps (seconds since epoch) for precise synchronization across devices.
+    
+    ## File Transfer
+    Video files are transferred using a binary protocol with JSON headers containing metadata.
+    
+  version: 1.0.0
+  contact:
+    name: multiCam API
+    
+servers:
+  - url: 'tcp://{device_ip}:8080'
+    description: Individual multiCam device
+    variables:
+      device_ip:
+        default: '192.168.1.100'
+        description: IP address of the multiCam device
+        
+paths:
+  /command:
+    post:
+      summary: Send command to multiCam device
+      description: |
+        Send recording commands to multiCam devices. All commands use the same endpoint but different command types and parameters.
+        
+        **Connection**: TCP socket connection to device on port 8080
+        **Format**: JSON message sent as raw bytes
+        **Response**: JSON response with status and metadata
+        
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommandMessage'
+            examples:
+              start_recording_immediate:
+                summary: Start Recording (Immediate)
+                description: Start recording immediately without synchronization
+                value:
+                  command: "START_RECORDING"
+                  timestamp: 1756058338.373178
+                  deviceId: "controller"
+                  
+              start_recording_scheduled:
+                summary: Start Recording (Scheduled)  
+                description: Start recording at a specific future timestamp for synchronization
+                value:
+                  command: "START_RECORDING"
+                  timestamp: 1756058341.500000
+                  deviceId: "controller"
+                  
+              stop_recording:
+                summary: Stop Recording
+                description: Stop current recording session
+                value:
+                  command: "STOP_RECORDING"
+                  timestamp: 1756058360.123456
+                  deviceId: "controller"
+                  
+              device_status:
+                summary: Get Device Status
+                description: Request current status of the device
+                value:
+                  command: "DEVICE_STATUS"
+                  timestamp: 1756058365.789012
+                  deviceId: "controller"
+                  
+              get_video:
+                summary: Download Video File
+                description: Request download of a specific video file by ID
+                value:
+                  command: "GET_VIDEO"
+                  timestamp: 1756058370.345678
+                  deviceId: "controller"
+                  fileId: "video_1756058338.373"
+                  
+              heartbeat:
+                summary: Heartbeat Check
+                description: Keep connection alive and check device responsiveness
+                value:
+                  command: "HEARTBEAT"
+                  timestamp: 1756058375.901234
+                  deviceId: "controller"
+                  
+      responses:
+        '200':
+          description: Command processed successfully
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/StatusResponse'
+                  - $ref: '#/components/schemas/FileResponse'
+              examples:
+                start_accepted:
+                  summary: Start Recording Accepted
+                  value:
+                    deviceId: "383D6B9F-806C-48D7-ABC7-F772EDE2E15B"
+                    status: "Command received"
+                    timestamp: 1756058338.497324
+                    isRecording: true
+                    fileId: null
+                    fileSize: null
+                    
+                start_scheduled:
+                  summary: Scheduled Start Accepted
+                  value:
+                    deviceId: "383D6B9F-806C-48D7-ABC7-F772EDE2E15B"
+                    status: "Scheduled recording accepted"
+                    timestamp: 1756058338.497324
+                    isRecording: false
+                    fileId: null
+                    fileSize: null
+                    
+                stop_with_file:
+                  summary: Stop Recording with File ID
+                  value:
+                    deviceId: "383D6B9F-806C-48D7-ABC7-F772EDE2E15B"
+                    status: "Recording stopped"
+                    timestamp: 1756058360.234567
+                    isRecording: false
+                    fileId: "video_1756058338.373"
+                    fileSize: null
+                    
+                status_response:
+                  summary: Device Status Response
+                  value:
+                    deviceId: "383D6B9F-806C-48D7-ABC7-F772EDE2E15B"
+                    status: "Ready"
+                    timestamp: 1756058365.890123
+                    isRecording: false
+                    fileId: null
+                    fileSize: null
+                    
+                file_info:
+                  summary: File Download Info
+                  description: Sent before binary file data
+                  value:
+                    deviceId: "383D6B9F-806C-48D7-ABC7-F772EDE2E15B"
+                    fileId: "video_1756058338.373"
+                    fileName: "video_1756058338.373.mov"
+                    fileSize: 47523840
+                    status: "ready"
+                    
+        '400':
+          description: Invalid command or parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                deviceId: "383D6B9F-806C-48D7-ABC7-F772EDE2E15B"
+                status: "Invalid command format"
+                timestamp: 1756058370.456789
+                isRecording: false
+                fileId: null
+                fileSize: null
+                
+        '404':
+          description: File not found (for GET_VIDEO command)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                deviceId: "383D6B9F-806C-48D7-ABC7-F772EDE2E15B"
+                status: "File not found"
+                timestamp: 1756058370.456789
+                isRecording: false
+                fileId: null
+                fileSize: null
+
+components:
+  schemas:
+    CommandMessage:
+      type: object
+      required:
+        - command
+        - deviceId
+      properties:
+        command:
+          $ref: '#/components/schemas/RecordingCommand'
+        timestamp:
+          type: number
+          format: double
+          description: |
+            Unix timestamp (seconds since epoch) with sub-second precision.
+            - For START_RECORDING: When to begin recording (future timestamp for sync)
+            - For other commands: When command was sent
+          example: 1756058338.373178
+        deviceId:
+          type: string
+          description: Identifier of the controlling device/client
+          example: "controller"
+        fileId:
+          type: string
+          description: Required for GET_VIDEO command - identifies which file to download
+          example: "video_1756058338.373"
+          
+    RecordingCommand:
+      type: string
+      enum:
+        - START_RECORDING
+        - STOP_RECORDING
+        - DEVICE_STATUS
+        - HEARTBEAT
+        - GET_VIDEO
+      description: |
+        Available commands:
+        - **START_RECORDING**: Start camera recording (immediate or scheduled)
+        - **STOP_RECORDING**: Stop current recording session
+        - **DEVICE_STATUS**: Request device status information
+        - **HEARTBEAT**: Keep connection alive
+        - **GET_VIDEO**: Download recorded video file
+        
+    StatusResponse:
+      type: object
+      required:
+        - deviceId
+        - status
+        - timestamp
+        - isRecording
+      properties:
+        deviceId:
+          type: string
+          description: UUID identifier of the responding device
+          example: "383D6B9F-806C-48D7-ABC7-F772EDE2E15B"
+        status:
+          type: string
+          description: Human-readable status message
+          examples:
+            - "Command received"
+            - "Scheduled recording accepted"
+            - "Recording stopped"
+            - "Ready"
+            - "File not found"
+        timestamp:
+          type: number
+          format: double
+          description: Unix timestamp when response was generated
+          example: 1756058338.497324
+        isRecording:
+          type: boolean
+          description: Current recording state of the device
+          example: false
+        fileId:
+          type: string
+          nullable: true
+          description: File ID of recorded video (present in STOP_RECORDING response)
+          example: "video_1756058338.373"
+        fileSize:
+          type: integer
+          format: int64
+          nullable: true
+          description: Size of recorded file in bytes (future use)
+          example: null
+          
+    FileResponse:
+      type: object
+      required:
+        - deviceId
+        - fileId
+        - fileName
+        - fileSize
+        - status
+      description: |
+        Response sent before binary file data for GET_VIDEO command.
+        
+        **Binary Protocol Format:**
+        1. Header size (4 bytes, big-endian uint32)
+        2. JSON header (FileResponse object)
+        3. Binary file data
+        
+      properties:
+        deviceId:
+          type: string
+          description: UUID identifier of the device
+          example: "383D6B9F-806C-48D7-ABC7-F772EDE2E15B"
+        fileId:
+          type: string
+          description: Unique identifier of the file
+          example: "video_1756058338.373"
+        fileName:
+          type: string
+          description: Original filename with extension
+          example: "video_1756058338.373.mov"
+        fileSize:
+          type: integer
+          format: int64
+          description: Size of file in bytes
+          example: 47523840
+        status:
+          type: string
+          description: File transfer status
+          example: "ready"
+          
+    ErrorResponse:
+      type: object
+      required:
+        - deviceId
+        - status
+        - timestamp
+        - isRecording
+      properties:
+        deviceId:
+          type: string
+          description: UUID identifier of the device
+          example: "383D6B9F-806C-48D7-ABC7-F772EDE2E15B"
+        status:
+          type: string
+          description: Error message
+          examples:
+            - "File not found"
+            - "Invalid command format"
+            - "Device not ready"
+            - "Recording already in progress"
+        timestamp:
+          type: number
+          format: double
+          description: Unix timestamp when error occurred
+          example: 1756058370.456789
+        isRecording:
+          type: boolean
+          description: Current recording state
+          example: false
+        fileId:
+          type: string
+          nullable: true
+          description: Always null for error responses
+          example: null
+        fileSize:
+          type: integer
+          format: int64
+          nullable: true
+          description: Always null for error responses
+          example: null
+
+  securitySchemes: {}
+  
+tags:
+  - name: Recording
+    description: Recording control operations
+  - name: Status
+    description: Device status and health checks
+  - name: File Transfer
+    description: Video file download operations
+    
+externalDocs:
+  description: multiCam Project Documentation
+  url: https://github.com/multiCam/docs

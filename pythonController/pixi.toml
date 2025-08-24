@@ -1,0 +1,13 @@
+[workspace]
+authors = ["AngusEmmett <gusemmett@gmail.com>"]
+channels = ["conda-forge"]
+name = "multiCam"
+platforms = ["osx-arm64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+zeroconf = ">=0.147.0,<0.148"
+python = ">=3.13.5,<3.14"
+ffmpeg-python = ">=0.2.0,<0.3"
