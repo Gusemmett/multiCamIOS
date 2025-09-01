@@ -260,7 +260,20 @@ class CameraManager: NSObject, ObservableObject {
     }
     
     func getVideoURL(for fileId: String) -> URL? {
-        return recordedFiles[fileId]
+        // First check if it's a file from current session
+        if let url = recordedFiles[fileId] {
+            return url
+        }
+        
+        // If not found, check the Documents directory for existing files
+        let documentsPath = getDocumentsDirectory()
+        let potentialURL = documentsPath.appendingPathComponent("\(fileId).mov")
+        
+        if FileManager.default.fileExists(atPath: potentialURL.path) {
+            return potentialURL
+        }
+        
+        return nil
     }
     
     func getCurrentFileId() -> String? {
@@ -269,6 +282,46 @@ class CameraManager: NSObject, ObservableObject {
     
     func setRecordingStoppedHandler(_ handler: @escaping (String) -> Void) {
         self.onRecordingStopped = handler
+    }
+    
+    func getAllVideoFiles() -> [FileMetadata] {
+        let documentsPath = getDocumentsDirectory()
+        var files: [FileMetadata] = []
+        
+        do {
+            let fileURLs = try FileManager.default.contentsOfDirectory(at: documentsPath, includingPropertiesForKeys: [.fileSizeKey, .creationDateKey, .contentModificationDateKey])
+            
+            for url in fileURLs {
+                guard url.pathExtension.lowercased() == "mov" else { continue }
+                
+                let fileName = url.lastPathComponent
+                let fileId = String(fileName.dropLast(4)) // Remove .mov extension
+                
+                let resourceValues = try url.resourceValues(forKeys: [.fileSizeKey, .creationDateKey, .contentModificationDateKey])
+                
+                let fileSize = Int64(resourceValues.fileSize ?? 0)
+                let creationDate = resourceValues.creationDate?.timeIntervalSince1970 ?? 0
+                let modificationDate = resourceValues.contentModificationDate?.timeIntervalSince1970 ?? 0
+                
+                let metadata = FileMetadata(
+                    fileId: fileId,
+                    fileName: fileName,
+                    fileSize: fileSize,
+                    creationDate: creationDate,
+                    modificationDate: modificationDate
+                )
+                
+                files.append(metadata)
+            }
+            
+            // Sort by creation date, newest first
+            files.sort { $0.creationDate > $1.creationDate }
+            
+        } catch {
+            print("Error getting file metadata: \(error)")
+        }
+        
+        return files
     }
 }
 

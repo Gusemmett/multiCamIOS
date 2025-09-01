@@ -94,7 +94,7 @@ struct ContentView: View {
                     cameraManager.startRecording()
                 case .stopRecording:
                     cameraManager.stopRecording()
-                case .deviceStatus, .heartbeat, .getVideo:
+                case .deviceStatus, .heartbeat, .getVideo, .listFiles:
                     break
                 }
             }
@@ -119,6 +119,10 @@ struct ContentView: View {
             
             networkManager.setGetVideoHandler { fileId in
                 return cameraManager.getVideoURL(for: fileId)
+            }
+            
+            networkManager.setListFilesHandler {
+                return cameraManager.getAllVideoFiles()
             }
         }
     }

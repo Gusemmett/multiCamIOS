@@ -9,6 +9,7 @@ enum RecordingCommand: String, Codable {
     case deviceStatus = "DEVICE_STATUS"
     case heartbeat = "HEARTBEAT"
     case getVideo = "GET_VIDEO"
+    case listFiles = "LIST_FILES"
 }
 
 struct CommandMessage: Codable {
@@ -42,6 +43,21 @@ struct FileResponse: Codable {
     let status: String
 }
 
+struct FileMetadata: Codable {
+    let fileId: String
+    let fileName: String
+    let fileSize: Int64
+    let creationDate: TimeInterval
+    let modificationDate: TimeInterval
+}
+
+struct ListFilesResponse: Codable {
+    let deviceId: String
+    let status: String
+    let timestamp: TimeInterval
+    let files: [FileMetadata]
+}
+
 @MainActor
 class NetworkManager: NSObject, ObservableObject {
     @Published var isConnected = false
@@ -58,6 +74,7 @@ class NetworkManager: NSObject, ObservableObject {
     private var onScheduledStartCommand: ((TimeInterval) -> Void)?
     private var onGetVideoCommand: ((String) -> URL?)?
     private var onStopRecordingCommand: ((NWConnection) -> Void)?
+    private var onListFilesCommand: (() -> [FileMetadata])?
     private var lastRecordedFileId: String?
     
     override init() {
@@ -87,6 +104,10 @@ class NetworkManager: NSObject, ObservableObject {
     
     func setScheduledStartHandler(_ handler: @escaping (TimeInterval) -> Void) {
         self.onScheduledStartCommand = handler
+    }
+    
+    func setListFilesHandler(_ handler: @escaping () -> [FileMetadata]) {
+        self.onListFilesCommand = handler
     }
     
     func setLastRecordedFileId(_ fileId: String) {
@@ -194,6 +215,8 @@ class NetworkManager: NSObject, ObservableObject {
             Task { @MainActor in
                 if message.command == .getVideo {
                     self.handleGetVideoRequest(message, connection: connection)
+                } else if message.command == .listFiles {
+                    self.handleListFilesRequest(connection: connection)
                 } else if message.command == .stopRecording {
                     // Handle stop recording specially - don't send response immediately
                     self.onRecordingCommand?(message.command, message.timestamp)
@@ -325,6 +348,31 @@ class NetworkManager: NSObject, ObservableObject {
         } catch {
             print("NetworkManager: Error reading file: \(error)")
             sendErrorResponse("Error reading file: \(error.localizedDescription)", to: connection)
+        }
+    }
+    
+    private func handleListFilesRequest(connection: NWConnection) {
+        let files = onListFilesCommand?() ?? []
+        
+        let response = ListFilesResponse(
+            deviceId: deviceId,
+            status: "Files listed successfully",
+            timestamp: Date().timeIntervalSince1970,
+            files: files
+        )
+        
+        do {
+            let data = try JSONEncoder().encode(response)
+            connection.send(content: data, completion: .contentProcessed { error in
+                if let error = error {
+                    print("NetworkManager: Failed to send list files response: \(error)")
+                } else {
+                    print("NetworkManager: List files response sent successfully (\(files.count) files)")
+                }
+            })
+        } catch {
+            print("NetworkManager: Failed to encode list files response: \(error)")
+            sendErrorResponse("Error listing files: \(error.localizedDescription)", to: connection)
         }
     }
     

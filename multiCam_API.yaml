@@ -95,6 +95,14 @@ paths:
                   timestamp: 1756058375.901234
                   deviceId: "controller"
                   
+              list_files:
+                summary: List Files
+                description: Request list of all recorded video files with metadata
+                value:
+                  command: "LIST_FILES"
+                  timestamp: 1756058380.567890
+                  deviceId: "controller"
+                  
       responses:
         '200':
           description: Command processed successfully
@@ -104,6 +112,7 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/StatusResponse'
                   - $ref: '#/components/schemas/FileResponse'
+                  - $ref: '#/components/schemas/ListFilesResponse'
               examples:
                 start_accepted:
                   summary: Start Recording Accepted
@@ -154,6 +163,25 @@ paths:
                     fileName: "video_1756058338.373.mov"
                     fileSize: 47523840
                     status: "ready"
+                    
+                list_files_response:
+                  summary: List Files Response
+                  description: Response with metadata for all recorded video files
+                  value:
+                    deviceId: "383D6B9F-806C-48D7-ABC7-F772EDE2E15B"
+                    status: "Files listed successfully"
+                    timestamp: 1756058380.678901
+                    files:
+                      - fileId: "video_1756058338.373"
+                        fileName: "video_1756058338.373.mov"
+                        fileSize: 47523840
+                        creationDate: 1756058338.373
+                        modificationDate: 1756058358.456
+                      - fileId: "video_1756058200.123"
+                        fileName: "video_1756058200.123.mov"
+                        fileSize: 32154672
+                        creationDate: 1756058200.123
+                        modificationDate: 1756058220.789
                     
         '400':
           description: Invalid command or parameters
@@ -218,6 +246,7 @@ components:
         - DEVICE_STATUS
         - HEARTBEAT
         - GET_VIDEO
+        - LIST_FILES
       description: |
         Available commands:
         - **START_RECORDING**: Start camera recording (immediate or scheduled)
@@ -225,6 +254,7 @@ components:
         - **DEVICE_STATUS**: Request device status information
         - **HEARTBEAT**: Keep connection alive
         - **GET_VIDEO**: Download recorded video file
+        - **LIST_FILES**: List all recorded video files with metadata
         
     StatusResponse:
       type: object
@@ -347,6 +377,66 @@ components:
           nullable: true
           description: Always null for error responses
           example: null
+          
+    FileMetadata:
+      type: object
+      required:
+        - fileId
+        - fileName
+        - fileSize
+        - creationDate
+        - modificationDate
+      properties:
+        fileId:
+          type: string
+          description: Unique identifier of the file (without .mov extension)
+          example: "video_1756058338.373"
+        fileName:
+          type: string
+          description: Original filename with extension
+          example: "video_1756058338.373.mov"
+        fileSize:
+          type: integer
+          format: int64
+          description: Size of file in bytes
+          example: 47523840
+        creationDate:
+          type: number
+          format: double
+          description: Unix timestamp when file was created
+          example: 1756058338.373
+        modificationDate:
+          type: number
+          format: double
+          description: Unix timestamp when file was last modified
+          example: 1756058358.456
+          
+    ListFilesResponse:
+      type: object
+      required:
+        - deviceId
+        - status
+        - timestamp
+        - files
+      properties:
+        deviceId:
+          type: string
+          description: UUID identifier of the device
+          example: "383D6B9F-806C-48D7-ABC7-F772EDE2E15B"
+        status:
+          type: string
+          description: Status message
+          example: "Files listed successfully"
+        timestamp:
+          type: number
+          format: double
+          description: Unix timestamp when response was generated
+          example: 1756058380.678901
+        files:
+          type: array
+          description: Array of file metadata objects, sorted by creation date (newest first)
+          items:
+            $ref: '#/components/schemas/FileMetadata'
 
   securitySchemes: {}
   

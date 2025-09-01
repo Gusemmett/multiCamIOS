@@ -96,21 +96,43 @@ class MultiCamController:
             if command == "GET_VIDEO":
                 return self._handle_file_download(sock, device_ip, file_id)
             else:
-                # Wait for JSON response
-                response = sock.recv(1024)
-                if response:
-                    response_data = json.loads(response.decode('utf-8'))
+                # Wait for JSON response - use larger buffer and handle chunked responses for LIST_FILES
+                response_data = b""
+                
+                # For LIST_FILES, we may need to receive in chunks due to large responses
+                if command == "LIST_FILES":
+                    sock.settimeout(10)  # Set timeout for receiving data
+                    while True:
+                        try:
+                            chunk = sock.recv(8192)
+                            if not chunk:
+                                break
+                            response_data += chunk
+                            # Check if we have a complete JSON response
+                            try:
+                                decoded = response_data.decode('utf-8')
+                                json.loads(decoded)
+                                break  # Complete JSON received
+                            except (json.JSONDecodeError, UnicodeDecodeError):
+                                continue  # Keep receiving
+                        except socket.timeout:
+                            break
+                else:
+                    response_data = sock.recv(4096)
+                
+                if response_data:
+                    response_json = json.loads(response_data.decode('utf-8'))
                     if self.debug:
-                        print(f"📥 Response: {json.dumps(response_data, indent=2)}")
+                        print(f"📥 Response: {json.dumps(response_json, indent=2)}")
                     
                     # Extract file ID from stop recording response
-                    if command == "STOP_RECORDING" and "fileId" in response_data and response_data["fileId"]:
+                    if command == "STOP_RECORDING" and "fileId" in response_json and response_json["fileId"]:
                         if self.debug:
-                            print(f"📁 File ID received: {response_data['fileId']}")
-                        return response_data["fileId"]
+                            print(f"📁 File ID received: {response_json['fileId']}")
+                        return response_json["fileId"]
                     
                     # Return response data for further processing
-                    return response_data
+                    return response_json
                 
                 sock.close()
                 return True
@@ -234,6 +256,59 @@ class MultiCamController:
         
         return results
     
+    def list_files_on_all_devices(self):
+        """List all recorded files on all devices"""
+        if not self.discovered_devices:
+            print("❌ No devices discovered. Run discovery first.")
+            return
+        
+        print(f"📁 Listing files on {len(self.discovered_devices)} device(s)...\n")
+        
+        total_files = 0
+        total_size = 0
+        
+        for device_name, device in self.discovered_devices.items():
+            try:
+                print(f"📱 {device_name} ({device['ip']}:{device['port']}):")
+                response = self.send_command(device['ip'], device['port'], "LIST_FILES")
+                
+                if isinstance(response, dict) and 'files' in response:
+                    files = response['files']
+                    if files:
+                        print(f"   Found {len(files)} file(s):")
+                        device_total_size = 0
+                        
+                        for file_info in files:
+                            file_size_mb = file_info['fileSize'] / (1024 * 1024)
+                            device_total_size += file_info['fileSize']
+                            creation_time = time.strftime('%Y-%m-%d %H:%M:%S', 
+                                                        time.localtime(file_info['creationDate']))
+                            
+                            print(f"   • {file_info['fileName']}")
+                            print(f"     ID: {file_info['fileId']}")
+                            print(f"     Size: {file_size_mb:.1f} MB")
+                            print(f"     Created: {creation_time}")
+                            print()
+                        
+                        print(f"   Device total: {device_total_size / (1024 * 1024):.1f} MB")
+                        total_files += len(files)
+                        total_size += device_total_size
+                    else:
+                        print("   No files found")
+                else:
+                    print("   ❌ Failed to get file list")
+                
+                print()
+                
+            except Exception as e:
+                print(f"   ❌ Error: {e}")
+                print()
+        
+        if total_files > 0:
+            print(f"📊 Summary: {total_files} total files, {total_size / (1024 * 1024):.1f} MB total")
+        else:
+            print("📊 No files found on any device")
+    
     def manual_connect(self, ip, port=8080):
         """Manually connect to a device without discovery"""
         print(f"🔗 Manual connection to {ip}:{port}")
@@ -250,14 +325,15 @@ class MultiCamController:
         print("3. start - Start recording immediately (not synchronized)")
         print("4. stop - Stop recording on all devices")
         print("5. status - Get status from all devices")
-        print("6. download [device_name] [file_id] - Download video file")
-        print("7. download-all - Download all files from last recording")
-        print("8. stack-videos [output_name] - Stack downloaded videos vertically")
-        print("9. connect <ip> [port] - Manually connect to device")
-        print("10. check-sync - Check clock synchronization across devices")
-        print("11. debug - Toggle debug output on/off")
-        print("12. list - List discovered devices")
-        print("13. quit - Exit")
+        print("6. list-files - List all recorded files on all devices")
+        print("7. download [device_name] [file_id] - Download video file")
+        print("8. download-all - Download all files from last recording")
+        print("9. stack-videos [output_name] - Stack downloaded videos vertically")
+        print("10. connect <ip> [port] - Manually connect to device")
+        print("11. check-sync - Check clock synchronization across devices")
+        print("12. debug - Toggle debug output on/off")
+        print("13. list - List discovered devices")
+        print("14. quit - Exit")
 
     def interactive_mode(self):
         """Interactive command line interface"""
@@ -299,6 +375,8 @@ class MultiCamController:
                         self.last_file_ids = result
                 elif cmd[0] == "status":
                     self.send_command_to_all("DEVICE_STATUS")
+                elif cmd[0] == "list-files":
+                    self.list_files_on_all_devices()
                 elif cmd[0] == "download":
                     if len(cmd) == 3:
                         device_name, file_id = cmd[1], cmd[2]
