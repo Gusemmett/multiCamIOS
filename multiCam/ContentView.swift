@@ -48,11 +48,16 @@ struct ContentView: View {
                         .font(.title2)
                         .fontWeight(.bold)
                         .foregroundColor(cameraManager.isRecording ? .red : .white)
-                    
+
                     Text(networkManager.connectionStatus)
                         .font(.caption)
                         .foregroundColor(networkManager.isConnected ? .green : .yellow)
-                    
+
+                    // Time sync status
+                    Text("Time Sync: \(cameraManager.timeSync.syncStatus)")
+                        .font(.caption)
+                        .foregroundColor(cameraManager.timeSync.isSynchronized ? .green : .red)
+
                     Spacer()
                 }
                 .padding(.leading, 20)
@@ -123,6 +128,10 @@ struct ContentView: View {
             
             networkManager.setListFilesHandler {
                 return cameraManager.getAllVideoFiles()
+            }
+
+            networkManager.setSyncStatusHandler {
+                return cameraManager.timeSync.isSynchronized
             }
         }
     }

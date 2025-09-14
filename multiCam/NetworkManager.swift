@@ -75,6 +75,7 @@ class NetworkManager: NSObject, ObservableObject {
     private var onGetVideoCommand: ((String) -> URL?)?
     private var onStopRecordingCommand: ((NWConnection) -> Void)?
     private var onListFilesCommand: (() -> [FileMetadata])?
+    private var onSyncStatusCheck: (() -> Bool)?
     private var lastRecordedFileId: String?
     
     override init() {
@@ -108,6 +109,10 @@ class NetworkManager: NSObject, ObservableObject {
     
     func setListFilesHandler(_ handler: @escaping () -> [FileMetadata]) {
         self.onListFilesCommand = handler
+    }
+
+    func setSyncStatusHandler(_ handler: @escaping () -> Bool) {
+        self.onSyncStatusCheck = handler
     }
     
     func setLastRecordedFileId(_ fileId: String) {
@@ -222,10 +227,26 @@ class NetworkManager: NSObject, ObservableObject {
                     self.onRecordingCommand?(message.command, message.timestamp)
                     self.onStopRecordingCommand?(connection)
                 } else if message.command == .startRecording && message.timestamp != nil {
-                    // Handle scheduled start recording
+                    // Handle scheduled start recording - check sync status first
                     print("NetworkManager: Received scheduled start recording for timestamp \(message.timestamp!)")
+
+                    // Get sync status from camera manager (via callback)
+                    // For now, we'll add a sync check callback
+                    if let syncCheck = self.onSyncStatusCheck?(), !syncCheck {
+                        let response = StatusResponse(
+                            deviceId: self.deviceId,
+                            status: "Time not synchronized",
+                            timestamp: Date().timeIntervalSince1970,
+                            isRecording: false,
+                            fileId: nil,
+                            fileSize: nil
+                        )
+                        self.sendResponse(response, to: connection)
+                        return
+                    }
+
                     self.onScheduledStartCommand?(message.timestamp!)
-                    
+
                     let response = StatusResponse(
                         deviceId: self.deviceId,
                         status: "Scheduled recording accepted",
@@ -234,7 +255,7 @@ class NetworkManager: NSObject, ObservableObject {
                         fileId: nil,
                         fileSize: nil
                     )
-                    
+
                     self.sendResponse(response, to: connection)
                 } else {
                     self.onRecordingCommand?(message.command, message.timestamp)

@@ -38,17 +38,9 @@ cd pythonController
 pixi run python testNetworkCommands.py  # sends sample commands to the app
 ```
 
-If you do not have pixi installed, follow the instructions at <https://prefix.dev/pixi> or just create a virtualenv and install the dependencies listed in `pixi.lock`.
-
 ## Network Protocol
 
-A full description of the control protocol lives in [`multiCam_API.yaml`](multiCam_API.yaml).  You can render it with any OpenAPI viewer such as **Swagger UI**:
-
-```bash
-npm install -g http-server
-http-server .
-# then open http://localhost:8080/swagger-ui/?url=multiCam_API.yaml
-```
+A full description of the control protocol lives in [`multiCam_API.yaml`](multiCam_API.yaml).
 
 ## Project Structure
 

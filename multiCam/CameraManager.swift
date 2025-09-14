@@ -15,24 +15,27 @@ class CameraManager: NSObject, ObservableObject {
             print("isRecording changed to: \(isRecording)")
         }
     }
-    
+
     @Published var isSetupComplete = false {
         didSet {
             print("isSetupComplete changed to: \(isSetupComplete)")
         }
     }
-    
+
     @Published var errorMessage: String? {
         didSet {
             print("errorMessage changed to: \(errorMessage ?? "nil")")
         }
     }
-    
+
     @Published var session: AVCaptureSession? {
         didSet {
             print("session changed to: \(session != nil ? "non-nil" : "nil")")
         }
     }
+
+    // Time synchronization
+    let timeSync = TimeSync()
     
     private var videoOutput: AVCaptureMovieFileOutput?
     private var currentVideoURL: URL?
@@ -43,6 +46,11 @@ class CameraManager: NSObject, ObservableObject {
     override init() {
         super.init()
         setupCamera()
+
+        // Start NTP synchronization immediately
+        Task {
+            await timeSync.synchronizeTime()
+        }
     }
     
     private func setupCamera() {
@@ -199,31 +207,46 @@ class CameraManager: NSObject, ObservableObject {
     func startRecording(at scheduledTime: TimeInterval? = nil) {
         guard let videoOutput = videoOutput,
               !videoOutput.isRecording else { return }
-        
-        let timestamp = Date().timeIntervalSince1970
+
+        let timestamp = timeSync.getSynchronizedTime()
         let fileId = "video_\(timestamp)"
         let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let videoURL = documentsPath.appendingPathComponent("\(fileId).mov")
-        
+
         currentVideoURL = videoURL
         currentFileId = fileId
-        
+
         if let scheduledTime = scheduledTime {
-            let currentTime = Date().timeIntervalSince1970
-            let delay = scheduledTime - currentTime
-            
-            if delay > 0 {
-                print("Scheduled recording start in \(delay) seconds at timestamp \(scheduledTime)")
+            // Check if time is synchronized for scheduled recordings
+            guard timeSync.isSynchronized else {
+                print("Cannot accept scheduled recording: Time not synchronized")
+                return
+            }
+
+            let currentSyncTime = timeSync.getSynchronizedTime()
+            let delay = scheduledTime - currentSyncTime
+
+            print("Scheduled recording: target=\(scheduledTime), current=\(currentSyncTime), delay=\(delay)s")
+
+            if delay <= 2.0 { // 2 second immediate window to match Android
+                print("Scheduled time within immediate window (\(delay)s), starting immediately")
+                executeRecordingStart(to: videoURL)
+            } else if delay > 0 {
+                print("Scheduling recording start in \(delay) seconds using synchronized time")
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    let actualStartTime = self?.timeSync.getSynchronizedTime() ?? 0
+                    print("Actually starting recording at synchronized timestamp \(actualStartTime)")
                     self?.executeRecordingStart(to: videoURL)
                 }
                 return
             } else {
-                print("Scheduled time \(scheduledTime) has already passed (current: \(currentTime)), starting immediately")
+                print("Scheduled time \(scheduledTime) has already passed (current sync: \(currentSyncTime)), starting immediately")
+                executeRecordingStart(to: videoURL)
             }
+        } else {
+            // Immediate recording
+            executeRecordingStart(to: videoURL)
         }
-        
-        executeRecordingStart(to: videoURL)
     }
     
     private func executeRecordingStart(to videoURL: URL) {
