@@ -7,6 +7,7 @@
 
 import AVFoundation
 import UIKit
+import CoreMedia
 
 @MainActor
 class CameraManager: NSObject, ObservableObject {
@@ -42,6 +43,27 @@ class CameraManager: NSObject, ObservableObject {
     private var currentFileId: String?
     private var recordedFiles: [String: URL] = [:]
     private var onRecordingStopped: ((String) -> Void)?
+
+    // Immediate recording + trimming properties
+    private var commandReceivedTime: TimeInterval = 0
+    private var targetStartTime: TimeInterval = 0
+    private var actualRecordingStartTime: TimeInterval = 0
+    private var firstFramePresentationTime: CMTime = CMTime.zero
+    private var captureStartTime: CMTime = CMTime.zero
+
+    // Recording state for immediate mode
+    private var isImmediateRecording = false
+    private var tempRecordingURL: URL?
+    private var finalRecordingURL: URL?
+    private var scheduledDuration: TimeInterval = 0
+
+    // iOS version detection for startPTS support
+    private var supportsStartPTS: Bool {
+        if #available(iOS 18.2, *) {
+            return true
+        }
+        return false
+    }
     
     override init() {
         super.init()
@@ -208,14 +230,6 @@ class CameraManager: NSObject, ObservableObject {
         guard let videoOutput = videoOutput,
               !videoOutput.isRecording else { return }
 
-        let timestamp = timeSync.getSynchronizedTime()
-        let fileId = "video_\(timestamp)"
-        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let videoURL = documentsPath.appendingPathComponent("\(fileId).mov")
-
-        currentVideoURL = videoURL
-        currentFileId = fileId
-
         if let scheduledTime = scheduledTime {
             // Check if time is synchronized for scheduled recordings
             guard timeSync.isSynchronized else {
@@ -223,30 +237,50 @@ class CameraManager: NSObject, ObservableObject {
                 return
             }
 
-            let currentSyncTime = timeSync.getSynchronizedTime()
-            let delay = scheduledTime - currentSyncTime
-
-            print("Scheduled recording: target=\(scheduledTime), current=\(currentSyncTime), delay=\(delay)s")
-
-            if delay <= 2.0 { // 2 second immediate window to match Android
-                print("Scheduled time within immediate window (\(delay)s), starting immediately")
-                executeRecordingStart(to: videoURL)
-            } else if delay > 0 {
-                print("Scheduling recording start in \(delay) seconds using synchronized time")
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                    let actualStartTime = self?.timeSync.getSynchronizedTime() ?? 0
-                    print("Actually starting recording at synchronized timestamp \(actualStartTime)")
-                    self?.executeRecordingStart(to: videoURL)
-                }
-                return
-            } else {
-                print("Scheduled time \(scheduledTime) has already passed (current sync: \(currentSyncTime)), starting immediately")
-                executeRecordingStart(to: videoURL)
-            }
+            // Use immediate recording with trimming for scheduled recordings
+            // Duration will be calculated when STOP command is received
+            startImmediateRecording(targetTime: scheduledTime)
         } else {
-            // Immediate recording
+            // Legacy immediate recording (no trimming)
+            let timestamp = timeSync.getSynchronizedTime()
+            let fileId = "video_\(timestamp)"
+            let documentsPath = getDocumentsDirectory()
+            let videoURL = documentsPath.appendingPathComponent("\(fileId).mov")
+
+            currentVideoURL = videoURL
+            currentFileId = fileId
             executeRecordingStart(to: videoURL)
         }
+    }
+
+    func startImmediateRecording(targetTime: TimeInterval) {
+        guard let videoOutput = videoOutput,
+              !videoOutput.isRecording else { return }
+
+        // Store timing information
+        commandReceivedTime = timeSync.getSynchronizedTime()
+        targetStartTime = targetTime
+        scheduledDuration = 0 // Will be calculated when recording stops
+        isImmediateRecording = true
+
+        // Create temporary file URL
+        let timestamp = Date().timeIntervalSince1970
+        let tempFileName = "temp_recording_\(timestamp).mov" 
+        tempRecordingURL = getDocumentsDirectory().appendingPathComponent(tempFileName)
+
+        // Create final file URL
+        let finalFileName = "video_\(targetTime).mov"
+        finalRecordingURL = getDocumentsDirectory().appendingPathComponent(finalFileName)
+        currentFileId = "video_\(targetTime)"
+
+        print("🚀 Starting immediate recording for target time: \(targetTime)")
+        print("📂 Temp file: \(tempRecordingURL?.lastPathComponent ?? "nil")")
+        print("📁 Final file: \(finalRecordingURL?.lastPathComponent ?? "nil")")
+        print("⏱️ Command received at: \(commandReceivedTime)")
+
+        // Start recording immediately to temp file
+        videoOutput.startRecording(to: tempRecordingURL!, recordingDelegate: self)
+        isRecording = true
     }
     
     private func executeRecordingStart(to videoURL: URL) {
@@ -262,7 +296,8 @@ class CameraManager: NSObject, ObservableObject {
     func stopRecording() {
         guard let videoOutput = videoOutput,
               videoOutput.isRecording else { return }
-        
+
+        print("🛑 Stopping recording...")
         videoOutput.stopRecording()
     }
     
@@ -310,22 +345,22 @@ class CameraManager: NSObject, ObservableObject {
     func getAllVideoFiles() -> [FileMetadata] {
         let documentsPath = getDocumentsDirectory()
         var files: [FileMetadata] = []
-        
+
         do {
             let fileURLs = try FileManager.default.contentsOfDirectory(at: documentsPath, includingPropertiesForKeys: [.fileSizeKey, .creationDateKey, .contentModificationDateKey])
-            
+
             for url in fileURLs {
                 guard url.pathExtension.lowercased() == "mov" else { continue }
-                
+
                 let fileName = url.lastPathComponent
                 let fileId = String(fileName.dropLast(4)) // Remove .mov extension
-                
+
                 let resourceValues = try url.resourceValues(forKeys: [.fileSizeKey, .creationDateKey, .contentModificationDateKey])
-                
+
                 let fileSize = Int64(resourceValues.fileSize ?? 0)
                 let creationDate = resourceValues.creationDate?.timeIntervalSince1970 ?? 0
                 let modificationDate = resourceValues.contentModificationDate?.timeIntervalSince1970 ?? 0
-                
+
                 let metadata = FileMetadata(
                     fileId: fileId,
                     fileName: fileName,
@@ -333,45 +368,229 @@ class CameraManager: NSObject, ObservableObject {
                     creationDate: creationDate,
                     modificationDate: modificationDate
                 )
-                
+
                 files.append(metadata)
             }
-            
+
             // Sort by creation date, newest first
             files.sort { $0.creationDate > $1.creationDate }
-            
+
         } catch {
             print("Error getting file metadata: \(error)")
         }
-        
+
         return files
+    }
+
+    // MARK: - Video Trimming Implementation
+
+    private func trimVideoToTarget() {
+        guard let tempURL = tempRecordingURL,
+              let finalURL = finalRecordingURL else {
+            print("❌ Missing URLs for trimming")
+            return
+        }
+
+        let asset = AVAsset(url: tempURL)
+
+        // Calculate trim offset
+        let trimOffsetSeconds = targetStartTime - actualRecordingStartTime
+        let trimStartTime = CMTime(seconds: max(0, trimOffsetSeconds), preferredTimescale: 600)
+
+        // Calculate the actual duration to keep (from target start time until recording stop)
+        let effectiveRecordingDuration = scheduledDuration - max(0, trimOffsetSeconds)
+
+        // Safety check: if trim offset is larger than total duration, use a minimal duration
+        let finalDuration = max(0.1, effectiveRecordingDuration) // Minimum 0.1s
+        let recordingDuration = CMTime(seconds: finalDuration, preferredTimescale: 600)
+
+        print("✂️ Trimming video:")
+        print("   • Trim offset: \(trimOffsetSeconds)s")
+        print("   • Start time: \(trimStartTime)")
+        print("   • Total recorded duration: \(scheduledDuration)s")
+        print("   • Effective duration: \(effectiveRecordingDuration)s")
+        print("   • Final duration: \(finalDuration)s")
+
+        // Create export session
+        guard let exportSession = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {
+            print("❌ Failed to create export session")
+            fallbackToTempFile()
+            return
+        }
+
+        // Set trim range
+        let trimRange = CMTimeRange(start: trimStartTime, duration: recordingDuration)
+        exportSession.timeRange = trimRange
+        exportSession.outputURL = finalURL
+        exportSession.outputFileType = .mov
+
+        // Export trimmed video
+        exportSession.exportAsynchronously { [weak self] in
+            DispatchQueue.main.async {
+                self?.handleTrimCompletion(exportSession: exportSession)
+            }
+        }
+    }
+
+    private func handleTrimCompletion(exportSession: AVAssetExportSession) {
+        switch exportSession.status {
+        case .completed:
+            print("✅ Video trimming completed successfully")
+
+            // Store final file reference
+            if let finalURL = finalRecordingURL,
+               let fileId = currentFileId {
+                recordedFiles[fileId] = finalURL
+                print("📁 Final video stored: \(finalURL.lastPathComponent)")
+
+                // Notify completion
+                onRecordingStopped?(fileId)
+            }
+
+            // Cleanup
+            cleanupTempFiles()
+
+        case .failed:
+            print("❌ Video trimming failed: \(exportSession.error?.localizedDescription ?? "Unknown error")")
+            fallbackToTempFile()
+
+        case .cancelled:
+            print("⚠️ Video trimming cancelled")
+            fallbackToTempFile()
+
+        default:
+            print("⚠️ Video trimming status: \(exportSession.status.rawValue)")
+            fallbackToTempFile()
+        }
+
+        // Reset state
+        isImmediateRecording = false
+    }
+
+    private func handleNormalRecordingCompletion(_ outputFileURL: URL) {
+        print("Recording saved to: \(outputFileURL)")
+        if let fileId = currentFileId {
+            recordedFiles[fileId] = outputFileURL
+            print("Stored file mapping: \(fileId) -> \(outputFileURL.lastPathComponent)")
+
+            // Notify callback of recording completion
+            onRecordingStopped?(fileId)
+        }
+    }
+
+    private func fallbackToTempFile() {
+        guard let tempURL = tempRecordingURL,
+              let finalURL = finalRecordingURL else { return }
+
+        // If trimming fails, use the original temp file
+        do {
+            if FileManager.default.fileExists(atPath: finalURL.path) {
+                try FileManager.default.removeItem(at: finalURL)
+            }
+            try FileManager.default.moveItem(at: tempURL, to: finalURL)
+
+            if let fileId = currentFileId {
+                recordedFiles[fileId] = finalURL
+                onRecordingStopped?(fileId)
+            }
+
+            print("⚠️ Used fallback temp file due to trimming failure")
+        } catch {
+            print("❌ Fallback failed: \(error)")
+        }
+
+        // Don't call cleanupTempFiles here since we moved the temp file
+        tempRecordingURL = nil
+    }
+
+    private func cleanupTempFiles() {
+        if let tempURL = tempRecordingURL,
+           FileManager.default.fileExists(atPath: tempURL.path) {
+            try? FileManager.default.removeItem(at: tempURL)
+        }
+        tempRecordingURL = nil
+    }
+
+    private func logPerformanceMetrics() {
+        let commandToRecordLatency = actualRecordingStartTime - commandReceivedTime
+        let targetAccuracy = abs(targetStartTime - actualRecordingStartTime)
+
+        print("📊 Performance Metrics:")
+        print("   • Command to record latency: \(Int(commandToRecordLatency * 1000))ms")
+        print("   • Target timing accuracy: \(Int(targetAccuracy * 1000))ms")
+        print("   • Supports startPTS: \(supportsStartPTS)")
     }
 }
 
 extension CameraManager: AVCaptureFileOutputRecordingDelegate {
-    nonisolated func fileOutput(_ output: AVCaptureFileOutput, didStartRecordingTo fileURL: URL, from connections: [AVCaptureConnection]) {
+    // iOS 18.2+ with precise startPTS
+    @available(iOS 18.2, *)
+    nonisolated func fileOutput(_ output: AVCaptureFileOutput,
+                               didStartRecordingTo fileURL: URL,
+                               startPTS: CMTime,
+                               from connections: [AVCaptureConnection]) {
         DispatchQueue.main.async {
-            print("Started recording to: \(fileURL)")
-        }
-    }
-    
-    nonisolated func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL, from connections: [AVCaptureConnection], error: Error?) {
-        DispatchQueue.main.async {
-            self.isRecording = false
-            
-            if let error = error {
-                self.errorMessage = "Recording failed: \(error.localizedDescription)"
-            } else {
-                print("Recording saved to: \(outputFileURL)")
-                if let fileId = self.currentFileId {
-                    self.recordedFiles[fileId] = outputFileURL
-                    print("Stored file mapping: \(fileId) -> \(outputFileURL.lastPathComponent)")
-                    
-                    // Notify callback of recording completion
-                    self.onRecordingStopped?(fileId)
-                }
+            self.actualRecordingStartTime = self.timeSync.getSynchronizedTime()
+            self.firstFramePresentationTime = startPTS
+
+            print("🎬 Recording started with precise startPTS: \(startPTS)")
+            print("🕐 Actual start time: \(self.actualRecordingStartTime)")
+            print("🎯 Target start time: \(self.targetStartTime)")
+
+            if self.isImmediateRecording {
+                let timingOffset = self.targetStartTime - self.actualRecordingStartTime
+                print("⏱️ Timing offset: \(timingOffset)s")
+                self.logPerformanceMetrics()
             }
         }
     }
-    
+
+    // iOS < 18.2 fallback
+    nonisolated func fileOutput(_ output: AVCaptureFileOutput, didStartRecordingTo fileURL: URL, from connections: [AVCaptureConnection]) {
+        DispatchQueue.main.async {
+            self.actualRecordingStartTime = self.timeSync.getSynchronizedTime()
+
+            // Capture session synchronization clock time as fallback
+            if let session = self.session, let syncClock = session.synchronizationClock {
+                self.captureStartTime = syncClock.time
+            }
+
+            print("🎬 Recording started (legacy): \(self.actualRecordingStartTime)")
+
+            if self.isImmediateRecording {
+                print("🎯 Target start time: \(self.targetStartTime)")
+                let timingOffset = self.targetStartTime - self.actualRecordingStartTime
+                print("⏱️ Timing offset: \(timingOffset)s")
+                self.logPerformanceMetrics()
+            }
+        }
+    }
+
+    nonisolated func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL, from connections: [AVCaptureConnection], error: Error?) {
+        DispatchQueue.main.async {
+            self.isRecording = false
+
+            if let error = error {
+                print("❌ Recording error: \(error)")
+                self.errorMessage = "Recording failed: \(error.localizedDescription)"
+                self.cleanupTempFiles()
+                return
+            }
+
+            if self.isImmediateRecording {
+                print("✅ Immediate recording completed, starting trim process...")
+
+                // Calculate actual recording duration
+                let recordingStopTime = self.timeSync.getSynchronizedTime()
+                let actualRecordingDuration = recordingStopTime - self.actualRecordingStartTime
+                self.scheduledDuration = actualRecordingDuration
+
+                print("🕐 Recording duration: \(actualRecordingDuration)s")
+                self.trimVideoToTarget()
+            } else {
+                // Handle normal recording completion
+                self.handleNormalRecordingCompletion(outputFileURL)
+            }
+        }
+    }
 }
