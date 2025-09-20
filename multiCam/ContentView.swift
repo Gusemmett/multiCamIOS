@@ -86,9 +86,17 @@ struct ContentView: View {
             }
         }
         .onAppear {
-            // Force landscape orientation
-            UIDevice.current.setValue(UIInterfaceOrientation.landscapeRight.rawValue, forKey: "orientation")
-            UINavigationController.attemptRotationToDeviceOrientation()
+            // Force landscape orientation aggressively
+            DispatchQueue.main.async {
+                UIDevice.current.setValue(UIInterfaceOrientation.landscapeRight.rawValue, forKey: "orientation")
+                UINavigationController.attemptRotationToDeviceOrientation()
+            }
+
+            // Also force it again after a short delay to ensure it takes effect
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                UIDevice.current.setValue(UIInterfaceOrientation.landscapeRight.rawValue, forKey: "orientation")
+                UINavigationController.attemptRotationToDeviceOrientation()
+            }
             
             // Store network connections that are waiting for stop recording response
             var pendingStopConnections: [NWConnection] = []

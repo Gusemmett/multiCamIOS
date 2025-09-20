@@ -27,12 +27,11 @@ struct CameraPreviewView: UIViewRepresentable {
         // Ensure the layer updates properly on orientation changes
         view.layer.masksToBounds = true
         
-        // Set initial preview layer orientation based on current device orientation
+        // Always set initial preview layer orientation to landscape
         if let connection = previewLayer.connection, connection.isVideoOrientationSupported {
-            if let videoOrientation = Self.currentVideoOrientation {
-                connection.videoOrientation = videoOrientation
-                print("Preview layer orientation set to \(videoOrientation)")
-            }
+            let videoOrientation = Self.currentVideoOrientation ?? .landscapeRight
+            connection.videoOrientation = videoOrientation
+            print("Preview layer orientation set to \(videoOrientation)")
         }
         
         view.layer.addSublayer(previewLayer)
@@ -74,11 +73,10 @@ struct CameraPreviewView: UIViewRepresentable {
                 CATransaction.setDisableActions(true)
                 previewLayer.frame = uiView.bounds
                 
-                // Ensure correct orientation matches current device orientation
+                // Ensure correct orientation is always landscape
                 if let connection = previewLayer.connection, connection.isVideoOrientationSupported {
-                    if let videoOrientation = Self.currentVideoOrientation {
-                        connection.videoOrientation = videoOrientation
-                    }
+                    let videoOrientation = Self.currentVideoOrientation ?? .landscapeRight
+                    connection.videoOrientation = videoOrientation
                 }
                 
                 CATransaction.commit()
@@ -105,7 +103,8 @@ private extension CameraPreviewView {
         case .landscapeRight:
             return .landscapeRight
         default:
-            return nil
+            // Always default to landscape right when device is in portrait or unknown orientation
+            return .landscapeRight
         }
     }
 }
@@ -118,10 +117,12 @@ extension CameraPreviewView {
 
         @objc func orientationDidChange() {
             guard let previewLayer, let connection = previewLayer.connection, connection.isVideoOrientationSupported else { return }
-            if let newOrientation = CameraPreviewView.currentVideoOrientation, connection.videoOrientation != newOrientation {
+            let newOrientation = CameraPreviewView.currentVideoOrientation ?? .landscapeRight
+            if connection.videoOrientation != newOrientation {
                 connection.videoOrientation = newOrientation
                 // Ensure the layer redraws correctly
                 previewLayer.frame = previewLayer.superlayer?.bounds ?? .zero
+                print("Orientation changed to: \(newOrientation)")
             }
         }
     }
