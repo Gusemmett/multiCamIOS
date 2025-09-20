@@ -15,6 +15,10 @@ struct ContentView: View {
     
     var body: some View {
         ZStack {
+            // Black background to hide white bars around camera preview
+            Color.black
+                .ignoresSafeArea(.all)
+
             Group {
                 if let session = cameraManager.session, cameraManager.isSetupComplete {
                     CameraPreviewView(session: session)
@@ -40,49 +44,20 @@ struct ContentView: View {
             .onChange(of: cameraManager.session) { session in
                 print("UI detected session change: \(session != nil)")
             }
-            
-            HStack {
-                // Left side - Recording status
-                VStack(alignment: .leading, spacing: 8) {
+
+            // Recording status indicator only
+            VStack {
+                HStack {
                     Text(cameraManager.isRecording ? "RECORDING" : "NOT RECORDING")
                         .font(.title2)
                         .fontWeight(.bold)
                         .foregroundColor(cameraManager.isRecording ? .red : .white)
-
-                    Text(networkManager.connectionStatus)
-                        .font(.caption)
-                        .foregroundColor(networkManager.isConnected ? .green : .yellow)
-
-                    // Time sync status
-                    Text("Time Sync: \(cameraManager.timeSync.syncStatus)")
-                        .font(.caption)
-                        .foregroundColor(cameraManager.timeSync.isSynchronized ? .green : .red)
+                        .padding(.leading, 20)
+                        .padding(.top, 20)
 
                     Spacer()
                 }
-                .padding(.leading, 20)
-                .padding(.top, 20)
-                
                 Spacer()
-                
-                // Right side - Debug info
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text("Setup: \(cameraManager.isSetupComplete ? "✅" : "❌")")
-                        .foregroundColor(.white)
-                        .font(.caption)
-                    Text("Session: \(cameraManager.session != nil ? "✅" : "❌")")
-                        .foregroundColor(.white)
-                        .font(.caption)
-                    if let error = cameraManager.errorMessage {
-                        Text("Error: \(error)")
-                            .foregroundColor(.red)
-                            .font(.caption2)
-                    }
-                    
-                    Spacer()
-                }
-                .padding(.trailing, 20)
-                .padding(.top, 20)
             }
         }
         .onAppear {
