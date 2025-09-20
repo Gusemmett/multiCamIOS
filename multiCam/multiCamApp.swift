@@ -24,6 +24,14 @@ struct multiCamApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .onAppear {
+                    // Prevent phone from sleeping while app is active
+                    UIApplication.shared.isIdleTimerDisabled = true
+                }
+                .onDisappear {
+                    // Re-enable auto-sleep when app goes to background
+                    UIApplication.shared.isIdleTimerDisabled = false
+                }
         }
         // Orientation locked globally via AppDelegate; Scene modifier not needed.
     }
